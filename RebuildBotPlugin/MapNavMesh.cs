@@ -254,7 +254,7 @@ namespace RebuildBotPlugin
         /// Unconstrained by zone partitions so bots can route around complex indoor walls,
         /// fences, and obstacles. Returns the full list of path steps from start to target.
         /// </summary>
-        public List<Vector2Int> FindPath(Vector2Int start, Vector2Int target, HashSet<int> blockedIndices = null, bool allowUnconstrainedFallback = true)
+        public List<Vector2Int> FindPath(Vector2Int start, Vector2Int target, HashSet<int> blockedIndices = null)
         {
             var walkProvider = RoWalkDataProvider.Instance;
             if (walkProvider == null || walkProvider.WalkData == null) return null;
@@ -386,7 +386,11 @@ namespace RebuildBotPlugin
                     if (blockedIndices != null && nidx != startIndex && nidx != targetIndex && blockedIndices.Contains(nidx))
                         continue;
 
-                    // Prevent diagonal corner-cutting through solid obstacles
+                    // Skip blocked tiles (e.g. non-target portals) unless start or target tile
+                    if (blockedIndices != null && nidx != startIndex && nidx != targetIndex && blockedIndices.Contains(nidx))
+                        continue;
+
+                    // Prevent diagonal cutting (only block if BOTH orthogonal cells are walls)
                     if (i >= 4)
                     {
                         if (!walkData.CellWalkable(cx, ny) && !walkData.CellWalkable(nx, cy))
@@ -410,9 +414,9 @@ namespace RebuildBotPlugin
             if (!found)
             {
                 // Fallback: retry unconstrained if blocked tiles made the destination unreachable
-                if (allowUnconstrainedFallback && blockedIndices != null && blockedIndices.Count > 0)
+                if (blockedIndices != null && blockedIndices.Count > 0)
                 {
-                    return FindPath(start, target, null, false);
+                    return FindPath(start, target, null);
                 }
                 return null;
             }
@@ -471,9 +475,9 @@ namespace RebuildBotPlugin
         /// Finds path from start to target, then samples waypoints with line-of-sight pruning
         /// that preserves corners and avoids cutting through blocked portals or walls.
         /// </summary>
-        public List<Vector2Int> FindRouteWaypoints(Vector2Int start, Vector2Int target, int hopDistance = 11, HashSet<int> blockedIndices = null, bool allowUnconstrainedFallback = true)
+        public List<Vector2Int> FindRouteWaypoints(Vector2Int start, Vector2Int target, int hopDistance = 11, HashSet<int> blockedIndices = null)
         {
-            var fullPath = FindPath(start, target, blockedIndices, allowUnconstrainedFallback);
+            var fullPath = FindPath(start, target, blockedIndices);
             if (fullPath == null || fullPath.Count <= 1)
                 return null;
 

@@ -23,59 +23,18 @@ namespace RebuildBotPlugin
         public int KafraMenuOption = -1;
         public int ZenyCost = 0;
 
-        // NPC Warp Properties
-        public bool IsNpcWarp = false;
-        public string NpcName;
-        public string OptionTextMatch;
-        public int NpcMenuOption = -1;
-
-        public bool IsNpcInteraction => IsKafraTeleport || IsNpcWarp;
-
-        public int MinX => IsNpcInteraction ? FromPos.x : FromPos.x - Width;
-        public int MaxX => IsNpcInteraction ? FromPos.x : FromPos.x + Width;
-        public int MinY => IsNpcInteraction ? FromPos.y : FromPos.y - Height;
-        public int MaxY => IsNpcInteraction ? FromPos.y : FromPos.y + Height;
+        public int MinX => IsKafraTeleport ? FromPos.x : FromPos.x - Width;
+        public int MaxX => IsKafraTeleport ? FromPos.x : FromPos.x + Width;
+        public int MinY => IsKafraTeleport ? FromPos.y : FromPos.y - Height;
+        public int MaxY => IsKafraTeleport ? FromPos.y : FromPos.y + Height;
 
         public Vector2Int CenterPos => FromPos;
 
         public Vector2Int GetWalkableTriggerTile(Assets.Scripts.MapEditor.RagnarokWalkData walkData, Vector2Int fromPlayerPos)
         {
-            if (IsNpcInteraction) return FromPos;
+            if (IsKafraTeleport) return FromPos;
 
             ushort playerZone = MapNavMesh.Instance != null ? MapNavMesh.Instance.GetZoneId(fromPlayerPos) : (ushort)0;
-
-            // Specific portal preferred trigger tiles:
-            // Prontera portal to Blacksmith (prt_in 60, 73) is at (177, 186)
-            if (string.Equals(FromMap, "prontera", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(DestMap, "prt_in", StringComparison.OrdinalIgnoreCase) &&
-                DestPos.x == 60 && DestPos.y == 73)
-            {
-                Vector2Int targetTile = new Vector2Int(177, 186);
-                if (walkData == null || (targetTile.x >= 0 && targetTile.y >= 0 && targetTile.x < walkData.Width && targetTile.y < walkData.Height && walkData.CellWalkable(targetTile.x, targetTile.y)))
-                {
-                    return targetTile;
-                }
-
-                // If (177, 186) itself is unwalkable (e.g. wall boundary), pick the closest walkable cell inside the portal box to (177, 186)
-                float bestWarpDist = float.MaxValue;
-                Vector2Int fallbackTile = targetTile;
-                for (int x = MinX; x <= MaxX; x++)
-                {
-                    for (int y = MinY; y <= MaxY; y++)
-                    {
-                        if (x >= 0 && y >= 0 && x < walkData.Width && y < walkData.Height && walkData.CellWalkable(x, y))
-                        {
-                            float d = Vector2.Distance(targetTile, new Vector2(x, y));
-                            if (d < bestWarpDist)
-                            {
-                                bestWarpDist = d;
-                                fallbackTile = new Vector2Int(x, y);
-                            }
-                        }
-                    }
-                }
-                return fallbackTile;
-            }
 
             Vector2Int bestTile = FromPos;
             float bestDist = float.MaxValue;
@@ -157,7 +116,7 @@ namespace RebuildBotPlugin
 
         public bool IsInsideWarp(Vector2Int pos, int padding = 0)
         {
-            if (IsNpcInteraction) return pos == FromPos;
+            if (IsKafraTeleport) return pos == FromPos;
             return pos.x >= (MinX - padding) && pos.x <= (MaxX + padding) &&
                    pos.y >= (MinY - padding) && pos.y <= (MaxY + padding);
         }
@@ -875,7 +834,7 @@ namespace RebuildBotPlugin
             if (!MapNodes.TryGetValue(map, out var warps)) return false;
             foreach (var warp in warps)
             {
-                if (warp.IsNpcInteraction) continue;
+                if (warp.IsKafraTeleport) continue;
                 if (ignoreWarp != null && (warp == ignoreWarp || (warp.FromPos == ignoreWarp.FromPos && string.Equals(warp.DestMap, ignoreWarp.DestMap, StringComparison.OrdinalIgnoreCase))))
                     continue;
 
@@ -894,7 +853,7 @@ namespace RebuildBotPlugin
             if (!MapNodes.TryGetValue(map, out var warps)) return false;
             foreach (var warp in warps)
             {
-                if (warp.IsNpcInteraction) continue;
+                if (warp.IsKafraTeleport) continue;
                 if (ignoreWarp != null && (warp == ignoreWarp || (warp.FromPos == ignoreWarp.FromPos && string.Equals(warp.DestMap, ignoreWarp.DestMap, StringComparison.OrdinalIgnoreCase))))
                     continue;
 
@@ -910,7 +869,7 @@ namespace RebuildBotPlugin
             if (mapWidth <= 0 || !MapNodes.TryGetValue(map, out var warps)) return result;
             foreach (var warp in warps)
             {
-                if (warp.IsNpcInteraction) continue;
+                if (warp.IsKafraTeleport) continue;
                 if (ignoreWarp != null && (warp == ignoreWarp || (warp.FromPos == ignoreWarp.FromPos && string.Equals(warp.DestMap, ignoreWarp.DestMap, StringComparison.OrdinalIgnoreCase))))
                     continue;
 

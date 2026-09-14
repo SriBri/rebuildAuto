@@ -430,44 +430,27 @@ namespace RebuildBotPlugin.Controllers
                 {
                     if (!IsTilePortalBlocked(netManager.CurrentMap, destination, avoidPortals, targetWarp, exactHitboxOnly))
                     {
-                        if (MapNavMesh.HasSafeLineOfSight(currentPos, destination, walkData, blockedIndices))
-                        {
-                            return SafeMoveTowards(currentPos, destination, avoidPortals, forwardOnly: true, out dispatchedStep, targetWarp, exactHitboxOnly);
-                        }
+                        if (SafeMoveTowards(currentPos, destination, avoidPortals, forwardOnly: true, out dispatchedStep, targetWarp, exactHitboxOnly))
+                            return true;
                     }
                 }
 
                 // 2. Obstacle or corner between current position and destination:
-                // Use unconstrained MapNavMesh to extract route waypoints around walls, partitions, and corridors
-                bool allowFallback = !BotConfigManager.Current.AvoidTrackedBosses || !BossTrackingService.Instance.HasTrackedBosses(netManager.CurrentMap);
-                var routeWaypoints = MapNavMesh.Instance.FindRouteWaypoints(currentPos, destination, hopDistance, blockedIndices, allowFallback);
+                // Use MapNavMesh to extract route waypoints around walls and corridors
+                var blockedIndices = (avoidPortals && (targetWarp != null || exactHitboxOnly))
+                    ? WorldGraph.Instance.GetMapPortalTileIndices(netManager.CurrentMap, walkData.Width, targetWarp, padding: 1)
+                    : null;
+                var routeWaypoints = MapNavMesh.Instance.FindRouteWaypoints(currentPos, destination, hopDistance, blockedIndices);
                 if (routeWaypoints != null && routeWaypoints.Count > 0)
                 {
                     // Find the furthest waypoint in routeWaypoints that we have direct line of sight to and <= 12 tiles away
                     Vector2Int stepTarget = routeWaypoints[0];
-                    for (int i = routeWaypoints.Count - 1; i >= 0; i--)
-                    {
-                        var wp = routeWaypoints[i];
-                        int cDist = Math.Max(Math.Abs(wp.x - currentPos.x), Math.Abs(wp.y - currentPos.y));
-                        if (cDist <= 12 && !IsTilePortalBlocked(netManager.CurrentMap, wp, avoidPortals, targetWarp, exactHitboxOnly))
-                        {
-                            if (BotConfigManager.Current.AvoidTrackedBosses && BossTrackingService.Instance.IsWithinBossZone(netManager.CurrentMap, wp, BotConfigManager.Current.BossAvoidanceRadius))
-                                continue;
-
-                            if (MapNavMesh.HasSafeLineOfSight(currentPos, wp, walkData, blockedIndices))
-                            {
-                                stepTarget = wp;
-                                break;
-                            }
-                        }
-                    }
-
                     if (SafeMoveTowards(currentPos, stepTarget, avoidPortals, forwardOnly: true, out dispatchedStep, targetWarp, exactHitboxOnly))
                         return true;
                 }
             }
 
-            // 3. Fallback: If no waypoints could be generated, step toward destination if clear, otherwise report blocked
+            // 3. Fallback to direct safe movement
             return SafeMoveTowards(currentPos, destination, avoidPortals, forwardOnly: false, out dispatchedStep, targetWarp, exactHitboxOnly);
         }
 
@@ -490,6 +473,16 @@ namespace RebuildBotPlugin.Controllers
 
             if (currentPos == destination) return true;
 
+            bool IsTilePortalBlocked(Vector2Int tile)
+            {
+                if (!avoidPortals) return false;
+                if (exactHitboxOnly || targetWarp != null)
+                {
+                    return WorldGraph.Instance.IsInsideAnyPortal(netManager.CurrentMap, tile, targetWarp, padding: 1);
+                }
+                return WorldGraph.Instance.IsNearPortal(netManager.CurrentMap, tile, BotConfigManager.Current.PortalSafetyRadius);
+            }
+
             var walkProvider = RoWalkDataProvider.Instance;
             if (walkProvider != null && walkProvider.WalkData != null)
             {
@@ -497,7 +490,7 @@ namespace RebuildBotPlugin.Controllers
                 Vector2 dir = destination - currentPos;
                 float totalDist = dir.magnitude;
 
-                // Direct step towards destination (up to 11 tiles)
+                // 1. Direct step towards destination (up to 11 tiles)
                 int directStepDist = Mathf.Min(11, Mathf.RoundToInt(totalDist));
                 Vector2Int directTarget = (totalDist <= 11f)
                     ? destination
@@ -530,7 +523,38 @@ namespace RebuildBotPlugin.Controllers
                 }
 
                 int chebyshevDist = Math.Max(Math.Abs(directTarget.x - currentPos.x), Math.Abs(directTarget.y - currentPos.y));
-                if (directWalkable && chebyshevDist <= 12 && !IsTilePortalBlocked(netManager.CurrentMap, directTarget, avoidPortals, targetWarp, exactHitboxOnly))
+                if (directWalkable && chebyshevDist <= 12 && !IsTilePortalBlocked(directTarget))
+                {
+                    var blockedIndices = (avoidPortals && (targetWarp != null || exactHitboxOnly))
+                        ? WorldGraph.Instance.GetMapPortalTileIndices(netManager.CurrentMap, walkData.Width, targetWarp, padding: 1)
+                        : null;
+
+                    if (MapNavMesh.HasSafeLineOfSight(currentPos, directTarget, walkData, blockedIndices))
+                    {
+                        netManager.MovePlayer(directTarget);
+                        dispatchedStep = directTarget;
+                        return true;
+                    }
+                }
+
+                // 2. Multi-angle progressive distance probe towards destination
+                float baseAngle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg;
+                float[] angleOffsets = forwardOnly
+                    ? new float[] { 0f, 15f, -15f, 30f, -30f }
+                    : new float[] { 0f, 15f, -15f, 30f, -30f, 45f, -45f };
+
+                int maxStep = Mathf.Clamp(Mathf.RoundToInt(totalDist), 3, 11);
+                int[] stepDistances = (maxStep >= 10)
+                    ? new int[] { maxStep, 8, 6, 4, 2 }
+                    : (maxStep >= 6)
+                        ? new int[] { maxStep, 4, 3, 2, 1 }
+                        : new int[] { maxStep, 2, 1 };
+
+                var probeBlockedIndices = (avoidPortals && (targetWarp != null || exactHitboxOnly))
+                    ? WorldGraph.Instance.GetMapPortalTileIndices(netManager.CurrentMap, walkData.Width, targetWarp, padding: 1)
+                    : null;
+
+                foreach (int d in stepDistances)
                 {
                     if (BotConfigManager.Current.AvoidTrackedBosses &&
                         BossTrackingService.Instance.IsWithinBossZone(netManager.CurrentMap, directTarget, BotConfigManager.Current.BossAvoidanceRadius))
@@ -538,27 +562,25 @@ namespace RebuildBotPlugin.Controllers
                         return false;
                     }
 
-                    var blockedIndices = (avoidPortals && (targetWarp != null || exactHitboxOnly))
-                        ? WorldGraph.Instance.GetMapPortalTileIndices(netManager.CurrentMap, walkData.Width, targetWarp, padding: 1)
-                        : null;
+                        // Candidate must make forward progress towards destination (never step sideways or backwards)
+                        float candDist = Vector2.Distance(candidate, destination);
+                        if (candDist >= totalDist - 0.2f) continue;
+
+                        if (avoidPortals && IsTilePortalBlocked(candidate))
+                            continue;
 
                     if (BotConfigManager.Current.AvoidTrackedBosses)
                     {
                         var bossIndices = BossTrackingService.Instance.GetBossBlockedTileIndices(netManager.CurrentMap, walkData.Width, walkData.Height, BotConfigManager.Current.BossAvoidanceRadius);
                         if (bossIndices != null && bossIndices.Count > 0)
                         {
-                            var combined = blockedIndices != null ? new HashSet<int>(blockedIndices) : new HashSet<int>();
-                            combined.UnionWith(bossIndices);
-                            blockedIndices = combined;
-                        }
-                    }
-
-                    if (MapNavMesh.HasSafeLineOfSight(currentPos, directTarget, walkData, blockedIndices))
-                    {
-                        if (player != null && (player.IsMoving || player.IsWalking) && directTarget == lastMoveDispatchedTarget && Time.time - lastMoveDispatchedTime < 0.35f)
-                        {
-                            dispatchedStep = directTarget;
-                            return true;
+                            if (MapNavMesh.HasSafeLineOfSight(currentPos, candidate, walkData, probeBlockedIndices))
+                            {
+                                netManager.MovePlayer(candidate);
+                                dispatchedStep = candidate;
+                                BotEngine.Instance?.LogEvent($"[Move] Step verified to ({candidate.x}, {candidate.y}) [offset: {angleOffset:F0}°, dist: {d}].");
+                                return true;
+                            }
                         }
 
                         netManager.MovePlayer(directTarget);
